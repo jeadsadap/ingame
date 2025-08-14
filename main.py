@@ -6,11 +6,11 @@ from google.oauth2.service_account import Credentials
 SCOPES = ["https://www.googleapis.com/auth/spreadsheets"]
 
 def sheets_service():
-    sa = json.loads(os.environ["acaf53997d6769141f27c2d37c140da2c14f45c1"])            # paste SA key JSON in env
+    sa = json.loads(os.environ["GOOGLE_SA_JSON"])            # paste SA key JSON in env
     creds = Credentials.from_service_account_info(sa, scopes=SCOPES)
     return build("sheets", "v4", credentials=creds)
 
-SHEET_ID = os.environ["1Ove8wn7PMIWW8oIzm27gu1MNuFpx88aqbpNvePxiPYI"]                            # set in env
+SHEET_ID = os.environ["SHEET_ID"]                            # set in env
 SHEET_NAME = os.environ.get("SHEET_NAME", "Matches")         # set in env (optional)
 SHARED_SECRET = os.environ.get("SHARED_SECRET", "")          # set in env (optional)
 
