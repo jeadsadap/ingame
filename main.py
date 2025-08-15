@@ -76,7 +76,7 @@ def ingame():
 
         resp = sheets_service().spreadsheets().values().append(
             spreadsheetId=SHEET_ID,
-            range=f"{SHEET_NAME}!A1",
+            range=f"'{SHEET_NAME}'!A1",
             valueInputOption="RAW",
             insertDataOption="INSERT_ROWS",
             body={"values": rows}
