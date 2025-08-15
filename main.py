@@ -21,7 +21,6 @@ def healthz():
     return "OK", 200
 
 @app.post("/ingame")
-@app.post("/ingame")
 def ingame():
     if SHARED_SECRET and request.headers.get("X-Secret") != SHARED_SECRET:
         return jsonify(ok=False, error="unauthorized"), 401
