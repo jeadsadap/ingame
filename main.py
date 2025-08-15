@@ -73,34 +73,34 @@ def ingame():
             return jsonify(ok=False, error="unauthorized"), 401
 
         ct  = request.headers.get("Content-Type","")
-        raw = request.get_data(as_text=True)
+raw = request.get_data(as_text=True)
 
-        def extract_rows(obj):
-            if isinstance(obj, list):  # top-level [[...]]
-                return obj
-            if isinstance(obj, dict):
-                if "rows" in obj:       # {"rows":[...]}
-                    return obj["rows"]
-                if "players" in obj:    # Extractor payload
-                    return to_rows_from_extractor_payload(obj)
-            return None
+def extract_rows(obj):
+    if isinstance(obj, list):  # top-level [[...]]
+        return obj
+    if isinstance(obj, dict):
+        if "rows" in obj:       # {"rows":[...]}
+            return obj["rows"]
+        if "players" in obj:    # Extractor payload
+            return to_rows_from_extractor_payload(obj)
+    return None
 
-        data = request.get_json(silent=True)
-        rows = extract_rows(data)
+data = request.get_json(silent=True)
+rows = extract_rows(data)
 
-        # If client sent a JSON string, parse again
-        if rows is None and isinstance(data, str):
-            try:
-                rows = extract_rows(json.loads(data))
-            except Exception:
-                rows = None
+# If client sent a JSON string, parse again
+if rows is None and isinstance(data, str):
+    try:
+        rows = extract_rows(json.loads(data))
+    except Exception:
+        rows = None
 
-        # Or form-encoded rows=<json>
-        if rows is None and "application/x-www-form-urlencoded" in ct and "rows" in request.form:
-            try:
-                rows = json.loads(request.form["rows"])
-            except Exception:
-                rows = None
+# Or form-encoded rows=<json>
+if rows is None and "application/x-www-form-urlencoded" in ct and "rows" in request.form:
+    try:
+        rows = json.loads(request.form["rows"])
+    except Exception:
+        rows = None
 
         # Sanitize nulls
         if isinstance(rows, list):
