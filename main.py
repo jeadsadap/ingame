@@ -4,13 +4,14 @@ from googleapiclient.discovery import build
 from googleapiclient.errors import HttpError
 from google.oauth2.service_account import Credentials
 
+# ------------------ config ------------------
 SCOPES        = ["https://www.googleapis.com/auth/spreadsheets"]
 SHEET_ID      = os.environ["SHEET_ID"]                      # required
 SHEET_NAME    = os.environ.get("SHEET_NAME", "Matches")     # tab name
 SHARED_SECRET = os.environ.get("SHARED_SECRET", "")         # optional
 
-# --- Flexible SA loader: env JSON / base64 / file ---
 def load_sa_json():
+    """Load service-account JSON from env (plain/base64) or a secret file."""
     raw = os.environ.get("GOOGLE_SA_JSON", "").strip()
     if raw:
         return json.loads(raw)
@@ -26,13 +27,17 @@ def load_sa_json():
 def sheets_service():
     sa = load_sa_json()
     if not sa:
-        raise RuntimeError("Service account JSON not found: set GOOGLE_SA_JSON or GOOGLE_SA_JSON_B64 or GOOGLE_SA_JSON_FILE")
+        raise RuntimeError(
+            "Service account JSON not found: set GOOGLE_SA_JSON or "
+            "GOOGLE_SA_JSON_B64 or GOOGLE_SA_JSON_FILE"
+        )
     creds = Credentials.from_service_account_info(sa, scopes=SCOPES)
     return build("sheets", "v4", credentials=creds)
 
-# --- Extractor payload -> 2D rows ---
+# --------- Extractor payload -> 2D rows ----------
 def to_rows_from_extractor_payload(data: dict) -> list[list]:
-    if not isinstance(data, dict): return []
+    if not isinstance(data, dict):
+        return []
     result = data.get("result") or ""
     time_played = data.get("time_played") or ""
     players = data.get("players") or []
@@ -42,17 +47,17 @@ def to_rows_from_extractor_payload(data: dict) -> list[list]:
 
     rows = []
     for p in players:
-        side   = p.get("side") or ""
-        name   = p.get("player_name") or ""
-        hero   = p.get("hero") or ""
-        kills  = p.get("kills") or 0
-        deaths = p.get("deaths") or 0
-        assists= p.get("assists") or 0
-        gold   = p.get("gold") or 0
-        mvp    = p.get("mvp_points") or 0
-        dealt  = p.get("damage_dealt") or 0
-        recv   = p.get("damage_received") or 0
-        team   = team_from_player(name)
+        side    = p.get("side") or ""
+        name    = p.get("player_name") or ""
+        hero    = p.get("hero") or ""
+        kills   = p.get("kills") or 0
+        deaths  = p.get("deaths") or 0
+        assists = p.get("assists") or 0
+        gold    = p.get("gold") or 0
+        mvp     = p.get("mvp_points") or 0
+        dealt   = p.get("damage_dealt") or 0
+        recv    = p.get("damage_received") or 0
+        team    = team_from_player(name)
         rows.append([
             "", side, team, name, hero,
             kills, deaths, assists, gold, mvp, dealt, recv,
@@ -60,6 +65,7 @@ def to_rows_from_extractor_payload(data: dict) -> list[list]:
         ])
     return rows
 
+# ------------------ app ------------------
 app = Flask(__name__)
 
 @app.get("/healthz")
@@ -69,40 +75,51 @@ def healthz():
 @app.post("/ingame")
 def ingame():
     try:
+        # optional shared-secret
         if SHARED_SECRET and request.headers.get("X-Secret") != SHARED_SECRET:
             return jsonify(ok=False, error="unauthorized"), 401
 
-        ct  = request.headers.get("Content-Type","")
-raw = request.get_data(as_text=True)
+        ct  = request.headers.get("Content-Type", "")
+        raw = request.get_data(as_text=True)
 
-def extract_rows(obj):
-    if isinstance(obj, list):  # top-level [[...]]
-        return obj
-    if isinstance(obj, dict):
-        if "rows" in obj:       # {"rows":[...]}
-            return obj["rows"]
-        if "players" in obj:    # Extractor payload
-            return to_rows_from_extractor_payload(obj)
-    return None
+        def extract_rows(obj):
+            if isinstance(obj, list):              # top-level [[...]]
+                return obj
+            if isinstance(obj, dict):
+                if "rows" in obj:                  # {"rows":[...]}
+                    return obj["rows"]
+                if "players" in obj:               # Extractor payload
+                    return to_rows_from_extractor_payload(obj)
+            return None
 
-data = request.get_json(silent=True)
-rows = extract_rows(data)
+        # 1) normal JSON
+        data = request.get_json(silent=True)
+        rows = extract_rows(data)
 
-# If client sent a JSON string, parse again
-if rows is None and isinstance(data, str):
-    try:
-        rows = extract_rows(json.loads(data))
-    except Exception:
-        rows = None
+        # 2) parse raw body if needed (handles stringified/double-encoded JSON)
+        if rows is None:
+            s = (raw or "").strip()
+            if s:
+                # direct JSON
+                try:
+                    rows = extract_rows(json.loads(s))
+                except Exception:
+                    rows = None
+                # double-encoded string: "\"{\\\"rows\\\":[...] }\""
+                if rows is None and s.startswith('"') and s.endswith('"'):
+                    try:
+                        rows = extract_rows(json.loads(json.loads(s)))
+                    except Exception:
+                        rows = None
 
-# Or form-encoded rows=<json>
-if rows is None and "application/x-www-form-urlencoded" in ct and "rows" in request.form:
-    try:
-        rows = json.loads(request.form["rows"])
-    except Exception:
-        rows = None
+        # 3) form-encoded rows=<json>
+        if rows is None and "application/x-www-form-urlencoded" in ct and "rows" in request.form:
+            try:
+                rows = json.loads(request.form["rows"])
+            except Exception:
+                rows = None
 
-        # Sanitize nulls
+        # sanitize nulls -> ""
         if isinstance(rows, list):
             rows = [[("" if c is None else c) for c in (r if isinstance(r, list) else [r])] for r in rows]
 
@@ -112,10 +129,10 @@ if rows is None and "application/x-www-form-urlencoded" in ct and "rows" in requ
                 error="expected {'rows': [[...],[...]]} / top-level [[...]] / Extractor payload (or stringified variants)",
                 content_type=ct,
                 body_preview=raw[:200],
-                kind=type(data).__name__,
+                kind=type(data).__name__ if data is not None else "NoneType",
             ), 400
 
-        # Append (quote tab name)
+        # append to Sheets (quote tab name)
         safe_tab = SHEET_NAME.replace("'", "''")
         rng = f"'{safe_tab}'!A1"
 
@@ -138,6 +155,7 @@ if rows is None and "application/x-www-form-urlencoded" in ct and "rows" in requ
             detail = {"raw": str(he)}
         return jsonify(ok=False, google_status=status, google_error=detail), status
 
-    except Exception:
+    except Exception as e:
+        # last-resort error
         print(traceback.format_exc())
-        return jsonify(ok=False, error="server exception"), 500
+        return jsonify(ok=False, error="server exception", detail=str(e)), 500
