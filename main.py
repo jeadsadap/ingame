@@ -11,7 +11,7 @@ def sheets_service():
     return build("sheets", "v4", credentials=creds)
 
 SHEET_ID = os.environ["SHEET_ID"]                            # set in env
-SHEET_NAME = os.environ.get("SHEET_NAME", "Matches")         # set in env (optional)
+SHEET_NAME = os.environ.get("SHEET_NAME", "")         # set in env (optional)
 SHARED_SECRET = os.environ.get("SHARED_SECRET", "")          # set in env (optional)
 
 app = Flask(__name__)
