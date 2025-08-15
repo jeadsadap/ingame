@@ -20,11 +20,48 @@ app = Flask(__name__)
 def healthz():
     return "OK", 200
 
+def to_rows_from_extractor_payload(data: dict) -> list[list]:
+    """
+    Accepts {"result": "...", "time_played": "...", "players":[{...},...]}
+    and returns the 2-D rows array expected by Sheets.
+    """
+    result = (data or {}).get("result", "") or ""
+    time_played = (data or {}).get("time_played", "") or ""
+    players = (data or {}).get("players", []) or []
+
+    def team_from_player(name: str) -> str:
+        if not name: return ""
+        # team abbrev = first token before a space, e.g., "FW NaiLiu" -> "FW"
+        return (name.split(" ", 1)[0] or "").strip()
+
+    rows = []
+    for p in players:
+        side  = p.get("side", "") or ""
+        name  = p.get("player_name", "") or ""
+        hero  = p.get("hero", "") or ""
+        kills = p.get("kills", 0) or 0
+        deaths= p.get("deaths", 0) or 0
+        assists = p.get("assists", 0) or 0
+        gold  = p.get("gold", 0) or 0
+        mvp   = p.get("mvp_points", 0) or 0
+        dealt = p.get("damage_dealt", 0) or 0
+        recv  = p.get("damage_received", 0) or 0
+        team  = team_from_player(name)
+
+        rows.append([
+            "", side, team, name, hero,
+            kills, deaths, assists, gold, mvp, dealt, recv,
+            time_played, result
+        ])
+    return rows
+
+
 # main.py — replace only the /ingame route
 import json, traceback
 from flask import request, jsonify
 from googleapiclient.errors import HttpError
 
+@app.post("/ingame")
 @app.post("/ingame")
 def ingame():
     try:
@@ -37,19 +74,19 @@ def ingame():
         data = request.get_json(silent=True)
         rows = None
 
-        if isinstance(data, list):          # top-level array
+        # Case 1: already a 2-D array (top-level)
+        if isinstance(data, list):
             rows = data
-        elif isinstance(data, dict):        # {"rows": ...}
+
+        # Case 2: {"rows":[...]} format
+        elif isinstance(data, dict) and "rows" in data:
             rows = data.get("rows")
 
-        # If rows is a JSON string (common builder quirk), parse it
-        if isinstance(rows, str):
-            try:
-                rows = json.loads(rows)
-            except Exception:
-                pass
+        # Case 3: Extractor payload {"result":...,"time_played":...,"players":[...]}
+        elif isinstance(data, dict) and "players" in data:
+            rows = to_rows_from_extractor_payload(data)
 
-        # Accept form-encoded rows=<json>
+        # Case 4: form-encoded rows=<json>
         if rows is None and "application/x-www-form-urlencoded" in ct and "rows" in request.form:
             try:
                 rows = json.loads(request.form["rows"])
@@ -63,26 +100,23 @@ def ingame():
         if not (isinstance(rows, list) and rows and isinstance(rows[0], list)):
             return jsonify(
                 ok=False,
-                error="expected {'rows': [[...],[...]]} or top-level [[...],[...]]",
+                error="expected {'rows': [[...],[...]]} / top-level [[...]] / or Extractor payload with 'players'",
                 content_type=ct,
-                kind=type(rows).__name__,
-                body_preview=raw[:200]
+                body_preview=raw[:200],
+                kind=type(data).__name__
             ), 400
 
-        resp = sheets_service().spreadsheets().values().append(
+        # --- Append (quote the tab name) ---
+        safe = SHEET_NAME.replace("'", "''")
+        target_range = f"'{safe}'!A1"
+        svc  = sheets_service()
+        resp = svc.spreadsheets().values().append(
             spreadsheetId=SHEET_ID,
-            range=f"'{SHEET_NAME}'!A1",
+            range=target_range,
             valueInputOption="RAW",
             insertDataOption="INSERT_ROWS",
-            body={"values": rows}
+            body={"values": rows},
         ).execute()
         return jsonify(ok=True, updates=resp.get("updates", {})), 200
 
-    except HttpError as he:
-        status = getattr(getattr(he, "resp", None), "status", 500)
-        detail = he.content.decode() if getattr(he, "content", None) else str(he)
-        return jsonify(ok=False, google_status=status, google_error=detail), status
-
-    except Exception:
-        print(traceback.format_exc())
-        return jsonify(ok=False, error="server exception"), 500
+    # keep your HttpError/Exception handlers as we added earlier
