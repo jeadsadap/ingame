@@ -20,11 +20,6 @@ app = Flask(__name__)
 def healthz():
     return "OK", 200
 
-# main.py
-import json, traceback
-from flask import request, jsonify
-from googleapiclient.errors import HttpError
-
 # main.py — replace only the /ingame route
 import json, traceback
 from flask import request, jsonify
@@ -85,11 +80,9 @@ def ingame():
 
     except HttpError as he:
         status = getattr(getattr(he, "resp", None), "status", 500)
-        try:
-            detail = json.loads(he.content.decode())
-        except Exception:
-            detail = {"raw": str(he)}
+        detail = he.content.decode() if getattr(he, "content", None) else str(he)
         return jsonify(ok=False, google_status=status, google_error=detail), status
+
     except Exception:
         print(traceback.format_exc())
         return jsonify(ok=False, error="server exception"), 500
