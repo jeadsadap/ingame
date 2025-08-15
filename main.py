@@ -21,32 +21,43 @@ def healthz():
     return "OK", 200
 
 @app.post("/ingame")
+@app.post("/ingame")
 def ingame():
     if SHARED_SECRET and request.headers.get("X-Secret") != SHARED_SECRET:
         return jsonify(ok=False, error="unauthorized"), 401
 
-    ct = request.headers.get("Content-Type","")
+    ct = request.headers.get("Content-Type", "")
     raw = request.get_data(as_text=True)
 
-    data = {}
-    if "application/json" in ct:
-        data = request.get_json(silent=True) or {}
-    elif "application/x-www-form-urlencoded" in ct:
-        if "rows" in request.form:
-            data["rows"] = request.form["rows"]  # may be a JSON string
+    # Try JSON first
+    data = request.get_json(silent=True)
 
-    rows = data.get("rows")
-    if isinstance(rows, str):
-        try:
-            rows = json.loads(rows)
-        except Exception:
-            pass  # will fail shape check below
+    rows = None
+    if isinstance(data, list):
+        rows = data                                  # top-level array
+    elif isinstance(data, dict):
+        rows = data.get("rows")                      # {"rows":[...]}
+    elif isinstance(raw, str):
+        s = raw.strip()
+        # Accept form-encoded rows=... or plain JSON string
+        if "application/x-www-form-urlencoded" in ct and "rows=" in raw:
+            try:
+                rows = json.loads(request.form["rows"])
+            except Exception:
+                rows = None
+        elif s.startswith("[") and s.endswith("]"):
+            try:
+                rows = json.loads(s)                 # stringified array
+            except Exception:
+                rows = None
 
     if not rows or not isinstance(rows, list) or not isinstance(rows[0], list):
-        return jsonify(ok=False,
-                       error="expected JSON: {'rows': [[...],[...]]}",
-                       content_type=ct,
-                       body_preview=raw[:200]), 400
+        return jsonify(
+            ok=False,
+            error="expected JSON: {'rows': [[...],[...]]} or just [[...],[...]]",
+            content_type=ct,
+            body_preview=raw[:200]
+        ), 400
 
     resp = sheets_service().spreadsheets().values().append(
         spreadsheetId=SHEET_ID,
