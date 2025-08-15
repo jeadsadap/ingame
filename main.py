@@ -20,49 +20,74 @@ app = Flask(__name__)
 def healthz():
     return "OK", 200
 
+# main.py
+import json, traceback
+from flask import request, jsonify
+from googleapiclient.errors import HttpError
+
 @app.post("/ingame")
 def ingame():
-    if SHARED_SECRET and request.headers.get("X-Secret") != SHARED_SECRET:
-        return jsonify(ok=False, error="unauthorized"), 401
+    try:
+        if SHARED_SECRET and request.headers.get("X-Secret") != SHARED_SECRET:
+            return jsonify(ok=False, error="unauthorized"), 401
 
-    ct = request.headers.get("Content-Type", "")
-    raw = request.get_data(as_text=True)
+        ct = request.headers.get("Content-Type","")
+        raw = request.get_data(as_text=True)
 
-    # Try JSON first
-    data = request.get_json(silent=True)
+        # Accept either {"rows":[...]} or top-level [...]
+        data = request.get_json(silent=True)
+        rows = None
+        if isinstance(data, list):
+            rows = data
+        elif isinstance(data, dict):
+            rows = data.get("rows")
 
-    rows = None
-    if isinstance(data, list):
-        rows = data                                  # top-level array
-    elif isinstance(data, dict):
-        rows = data.get("rows")                      # {"rows":[...]}
-    elif isinstance(raw, str):
-        s = raw.strip()
-        # Accept form-encoded rows=... or plain JSON string
-        if "application/x-www-form-urlencoded" in ct and "rows=" in raw:
+        # (Optional) accept form-encoded: rows=<json>
+        if rows is None and "application/x-www-form-urlencoded" in ct and "rows" in request.form:
             try:
                 rows = json.loads(request.form["rows"])
             except Exception:
                 rows = None
-        elif s.startswith("[") and s.endswith("]"):
-            try:
-                rows = json.loads(s)                 # stringified array
-            except Exception:
-                rows = None
 
-    if not rows or not isinstance(rows, list) or not isinstance(rows[0], list):
-        return jsonify(
-            ok=False,
-            error="expected JSON: {'rows': [[...],[...]]} or just [[...],[...]]",
-            content_type=ct,
-            body_preview=raw[:200]
-        ), 400
+        # Sanitize: replace None/null with ""
+        if rows and isinstance(rows, list):
+            rows = [[("" if c is None else c) for c in (r if isinstance(r, list) else [r])] for r in rows]
 
-    resp = sheets_service().spreadsheets().values().append(
-        spreadsheetId=SHEET_ID,
-        range=f"{SHEET_NAME}!A1",
-        valueInputOption="RAW",
-        insertDataOption="INSERT_ROWS",
-        body={"values": rows}
-    ).execute()
-    return jsonify(ok=True, updates=resp.get("updates", {})), 200
+        if not rows or not isinstance(rows, list) or not isinstance(rows[0], list):
+            return jsonify(ok=False,
+                           error="expected JSON: {'rows': [[...],[...]]} or just [[...],[...]]",
+                           content_type=ct, body_preview=raw[:200]), 400
+
+        # Append
+        svc = sheets_service()
+        resp = svc.spreadsheets().values().append(
+            spreadsheetId=SHEET_ID,
+            range=f"{SHEET_NAME}!A1",
+            valueInputOption="RAW",
+            insertDataOption="INSERT_ROWS",
+            body={"values": rows}
+        ).execute()
+
+        return jsonify(ok=True, updates=resp.get("updates", {})), 200
+
+    except HttpError as he:
+        # Surface Google error cleanly (403/404/400 etc.)
+        status = getattr(he, "resp", None).status if getattr(he, "resp", None) else 500
+        try:
+            detail = json.loads(he.content.decode())
+        except Exception:
+            detail = {"raw": str(he)}
+        return jsonify(ok=False, google_status=status, google_error=detail), status
+
+    except KeyError as ke:
+        # Missing env var like GOOGLE_SA_JSON or SHEET_ID
+        return jsonify(ok=False, error=f"missing env var: {ke!s}"), 500
+
+    except json.JSONDecodeError as je:
+        return jsonify(ok=False, error="GOOGLE_SA_JSON is not valid JSON", detail=str(je)), 500
+
+    except Exception:
+        # Last-resort: print traceback to logs & return message
+        print(traceback.format_exc())
+        return jsonify(ok=False, error="server exception", trace=traceback.format_exc()[-500:]), 500
+
