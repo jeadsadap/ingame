@@ -25,13 +25,30 @@ def ingame():
     if SHARED_SECRET and request.headers.get("X-Secret") != SHARED_SECRET:
         return jsonify(ok=False, error="unauthorized"), 401
 
-    body = request.get_json(force=True, silent=True) or {}
-    rows = body.get("rows")
-    if not rows or not isinstance(rows, list) or not isinstance(rows[0], list):
-        return jsonify(ok=False, error='expected JSON: {"rows":[[...],[...]]}'), 400
+    ct = request.headers.get("Content-Type","")
+    raw = request.get_data(as_text=True)
 
-    svc = sheets_service()
-    resp = svc.spreadsheets().values().append(
+    data = {}
+    if "application/json" in ct:
+        data = request.get_json(silent=True) or {}
+    elif "application/x-www-form-urlencoded" in ct:
+        if "rows" in request.form:
+            data["rows"] = request.form["rows"]  # may be a JSON string
+
+    rows = data.get("rows")
+    if isinstance(rows, str):
+        try:
+            rows = json.loads(rows)
+        except Exception:
+            pass  # will fail shape check below
+
+    if not rows or not isinstance(rows, list) or not isinstance(rows[0], list):
+        return jsonify(ok=False,
+                       error="expected JSON: {'rows': [[...],[...]]}",
+                       content_type=ct,
+                       body_preview=raw[:200]), 400
+
+    resp = sheets_service().spreadsheets().values().append(
         spreadsheetId=SHEET_ID,
         range=f"{SHEET_NAME}!A1",
         valueInputOption="RAW",
